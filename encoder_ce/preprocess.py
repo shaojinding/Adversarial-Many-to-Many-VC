@@ -111,7 +111,7 @@ def _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir,
         sources_file.close()
     
     # Process the utterances for each speaker
-    with ThreadPool(1) as pool:
+    with ThreadPool(8) as pool:
         list(tqdm(pool.imap(preprocess_speaker, speaker_dirs), dataset_name, len(speaker_dirs),
                   unit="speakers"))
     logger.finalize()
@@ -119,7 +119,7 @@ def _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir,
 
 
 def preprocess_librispeech(datasets_root: Path, out_dir: Path, skip_existing=False):
-    for dataset_name in librispeech_datasets["train"]["other"]:
+    for dataset_name in librispeech_datasets["dev"]["other"]:
         # Initialize the preprocessing
         dataset_root, logger = _init_preprocess_dataset(dataset_name, datasets_root, out_dir)
         if not dataset_root:
