@@ -1,5 +1,5 @@
 from scipy.ndimage.morphology import binary_dilation
-from encoder.params_data import *
+from encoder_ce.params_data import *
 from pathlib import Path
 from typing import Optional, Union
 import numpy as np

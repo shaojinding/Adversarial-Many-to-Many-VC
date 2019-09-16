@@ -1,8 +1,8 @@
-from encoder.params_data import *
-from encoder.model import SpeakerEncoder
-from encoder.audio import preprocess_wav   # We want to expose this function from here
+from encoder_ce.params_data import *
+from encoder_ce.model import SpeakerEncoder
+from encoder_ce.audio import preprocess_wav   # We want to expose this function from here
 from matplotlib import cm
-from encoder import audio
+from encoder_ce import audio
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
