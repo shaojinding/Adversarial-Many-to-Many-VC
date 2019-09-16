@@ -6,13 +6,6 @@ from utils.profiler import Profiler
 from pathlib import Path
 import torch
 
-def sync(device: torch.device):
-    # FIXME
-    return 
-    # For correct profiling (cuda operations are async)
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-
 def train(run_id: str, clean_data_root: Path, models_dir: Path, umap_every: int, save_every: int,
           backup_every: int, vis_every: int, force_restart: bool, visdom_server: str,
           no_visdom: bool):
@@ -33,7 +26,7 @@ def train(run_id: str, clean_data_root: Path, models_dir: Path, umap_every: int,
     # loss_device = torch.device("cpu")
     
     # Create the model and the optimizer
-    model = SpeakerEncoder(device)
+    model = SpeakerEncoder(dataset.num_speakers).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate_init)
     init_step = 1
     
@@ -70,21 +63,19 @@ def train(run_id: str, clean_data_root: Path, models_dir: Path, umap_every: int,
         
         # Forward pass
         inputs = torch.from_numpy(speaker_batch.data).to(device)
-        sync(device)
+        targets = torch.from_numpy(speaker_batch.label).to(device)
         profiler.tick("Data to %s" % device)
         embeds = model(inputs)
-        sync(device)
         profiler.tick("Forward pass")
         embeds_loss = embeds.view((speakers_per_batch, utterances_per_speaker, -1)).to(device)
-        loss, eer = model.loss(embeds_loss)
-        sync(device)
+        loss, eer = model.loss(embeds_loss, targets)
         profiler.tick("Loss")
 
         # Backward pass
         model.zero_grad()
         loss.backward()
         profiler.tick("Backward pass")
-        # model.do_gradient_ops()
+        model.do_gradient_ops()
         optimizer.step()
         profiler.tick("Parameter update")
         

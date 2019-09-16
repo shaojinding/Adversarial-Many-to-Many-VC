@@ -123,3 +123,57 @@ class GE2ELoss(nn.Module):
             fpr, tpr, thresholds = roc_curve(labels.flatten(), preds.flatten())
             eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
         return eer
+
+
+class CrossEntropyLoss(nn.Module):
+    def __init__(self):
+        super(CrossEntropyLoss, self).__init__()
+        self.loss_fn = nn.CrossEntropyLoss()
+
+    def forward(self, outputs, targets):
+        return self.loss_fn(outputs, targets)
+
+    def calc_new_centroids(self, dvecs, centroids, spkr, utt):
+        '''
+        Calculates the new centroids excluding the reference utterance
+        '''
+        excl = torch.cat((dvecs[spkr,:utt], dvecs[spkr,utt+1:]))
+        excl = torch.mean(excl, 0)
+        new_centroids = []
+        for i, centroid in enumerate(centroids):
+            if i == spkr:
+                new_centroids.append(excl)
+            else:
+                new_centroids.append(centroid)
+        return torch.stack(new_centroids)
+
+    def calc_cosine_sim(self, dvecs, centroids):
+        '''
+        Make the cosine similarity matrix with dims (N,M,N)
+        '''
+        cos_sim_matrix = []
+        for spkr_idx, speaker in enumerate(dvecs):
+            cs_row = []
+            for utt_idx, utterance in enumerate(speaker):
+                new_centroids = self.calc_new_centroids(dvecs, centroids, spkr_idx, utt_idx)
+                # vector based cosine similarity for speed
+                cs_row.append(torch.clamp(torch.mm(utterance.unsqueeze(1).transpose(0,1), new_centroids.transpose(0,1)) / (torch.norm(utterance) * torch.norm(new_centroids, dim=1)), 1e-6))
+            cs_row = torch.cat(cs_row, dim=0)
+            cos_sim_matrix.append(cs_row)
+        return torch.stack(cos_sim_matrix)
+
+    def compute_eer(self, dvecs):
+        with torch.no_grad():
+            speakers_per_batch, utterances_per_speaker = dvecs.shape[:2]
+            ground_truth = np.repeat(np.arange(speakers_per_batch), utterances_per_speaker)
+            inv_argmax = lambda i: np.eye(1, speakers_per_batch, i, dtype=np.int)[0]
+            labels = np.array([inv_argmax(i) for i in ground_truth])
+
+            centroids = torch.mean(dvecs, 1)
+            cos_sim_matrix = self.calc_cosine_sim(dvecs, centroids)
+            cos_sim_matrix = cos_sim_matrix.reshape((speakers_per_batch * utterances_per_speaker, speakers_per_batch))
+            preds = cos_sim_matrix.detach().cpu().numpy()
+            # Snippet from https://yangcha.github.io/EER-ROC/
+            fpr, tpr, thresholds = roc_curve(labels.flatten(), preds.flatten())
+            eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
+        return eer

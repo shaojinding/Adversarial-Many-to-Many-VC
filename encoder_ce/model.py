@@ -1,6 +1,6 @@
 from encoder_ce.params_model import *
 from encoder_ce.params_data import *
-from encoder_ce.loss import GE2ELoss
+from encoder_ce.loss import CrossEntropyLoss
 from scipy.interpolate import interp1d
 from sklearn.metrics import roc_curve
 from torch.nn.utils import clip_grad_norm_
@@ -11,27 +11,27 @@ import torch
 
 
 class SpeakerEncoder(nn.Module):
-    def __init__(self, device):
+    def __init__(self, num_classes):
         super().__init__()
-        self.device = device
+        self.num_classes = num_classes
         
         # Network defition
         self.lstm = nn.LSTM(input_size=mel_n_channels,
                             hidden_size=model_hidden_size, 
                             num_layers=model_num_layers, 
-                            batch_first=True).to(device)
+                            batch_first=True)
         self.linear = nn.Linear(in_features=model_hidden_size, 
-                                out_features=model_embedding_size).to(device)
-        self.relu = torch.nn.ReLU().to(device)
+                                out_features=model_embedding_size)
+        self.relu = torch.nn.ReLU()
+        self.classifier = nn.Linear(in_features=model_embedding_size,
+                                    out_features=self.num_classes)
+
 
         # Loss
         # self.loss_fn = nn.CrossEntropyLoss().to(loss_device)
-        self.loss_fn = GE2ELoss().to(device)
+        self.loss_fn = CrossEntropyLoss()
 
     def do_gradient_ops(self):
-        # Gradient scale
-        self.similarity_weight.grad *= 0.01
-        self.similarity_bias.grad *= 0.01
             
         # Gradient clipping
         clip_grad_norm_(self.parameters(), 3, norm_type=2)
@@ -54,13 +54,18 @@ class SpeakerEncoder(nn.Module):
         embeds_raw = self.relu(self.linear(hidden[-1]))
         
         # L2-normalize it
-        embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+        embeds = embeds_raw
+        # embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
         
         return embeds
 
-    def loss(self, embeds):
-        loss = self.loss_fn(embeds)
+    def loss(self, embeds, targets):
+        classifer_inputs = embeds.view(targets.shape[0], -1)
+        classifer_outputs = self.classifier(classifer_inputs)
+        loss = self.loss_fn(classifer_outputs, targets)
         # EER (not backpropagated)
+        # L2-normalize it
+        # embeds = embeds / torch.norm(embeds, dim=1, keepdim=True)
         eer = self.loss_fn.compute_eer(embeds)
         return loss, eer
 
