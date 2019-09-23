@@ -54,8 +54,8 @@ class SpeakerEncoder(nn.Module):
         embeds_raw = self.relu(self.linear(hidden[-1]))
         
         # L2-normalize it
-        embeds = embeds_raw
-        # embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+        # embeds = embeds_raw
+        embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
         
         return embeds
 
