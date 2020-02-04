@@ -96,10 +96,12 @@ def _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir,
             # Load and preprocess the waveform
             wav = audio.preprocess_wav(in_fpath)
             if len(wav) == 0:
+                print(in_fpath)
                 continue
             
             # Create the mel spectrogram, discard those that are too short
-            frames = audio.wav_to_mel_spectrogram(wav)
+            # frames = audio.wav_to_mel_spectrogram(wav)
+            frames = audio.wav_to_spectrogram(wav)
             if len(frames) < partials_n_frames:
                 continue
             
@@ -116,6 +118,17 @@ def _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir,
                   unit="speakers"))
     logger.finalize()
     print("Done preprocessing %s.\n" % dataset_name)
+
+
+def preprocess_l2arctic(datasets_root: Path, out_dir: Path, skip_existing=False):
+    dataset_name = "L2ARCTIC"
+    dataset_root, logger = _init_preprocess_dataset(dataset_name, datasets_root, out_dir)
+
+    # Preprocess all speakers
+    speaker_dirs = list(dataset_root.glob("*"))
+    speaker_dirs = [s.joinpath('wav') for s in speaker_dirs]
+    _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir, "wav",
+                             skip_existing, logger)
 
 
 def preprocess_librispeech(datasets_root: Path, out_dir: Path, skip_existing=False):
@@ -144,17 +157,18 @@ def preprocess_voxceleb1(datasets_root: Path, out_dir: Path, skip_existing=False
     
     # Select the ID and the nationality, filter out non-anglophone speakers
     nationalities = {line[0]: line[3] for line in metadata}
-    keep_speaker_ids = [speaker_id for speaker_id, nationality in nationalities.items() if 
+    keep_speaker_ids = [speaker_id for speaker_id, nationality in nationalities.items() if
                         nationality.lower() in anglophone_nationalites]
     print("VoxCeleb1: using samples from %d (presumed anglophone) speakers out of %d." % 
           (len(keep_speaker_ids), len(nationalities)))
     
     # Get the speaker directories for anglophone speakers only
-    speaker_dirs = dataset_root.joinpath("wav").glob("*")
-    speaker_dirs = [speaker_dir for speaker_dir in speaker_dirs if
-                    speaker_dir.name in keep_speaker_ids]
-    print("VoxCeleb1: found %d anglophone speakers on the disk, %d missing (this is normal)." % 
-          (len(speaker_dirs), len(keep_speaker_ids) - len(speaker_dirs)))
+    speaker_dirs = dataset_root.joinpath("train").glob("*")
+    speaker_dirs = [speaker_dir for speaker_dir in speaker_dirs]
+    # speaker_dirs = [speaker_dir for speaker_dir in speaker_dirs if
+    #                 speaker_dir.name in keep_speaker_ids]
+    print("VoxCeleb1: found %d anglophone speakers on the disk." %
+          (len(speaker_dirs)))
 
     # Preprocess all speakers
     _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir, "wav",
@@ -170,6 +184,21 @@ def preprocess_voxceleb2(datasets_root: Path, out_dir: Path, skip_existing=False
     
     # Get the speaker directories
     # Preprocess all speakers
-    speaker_dirs = list(dataset_root.joinpath("dev", "aac").glob("*"))
+    # speaker_dirs = list(dataset_root.joinpath("dev", "aac").glob("*"))
+    speaker_dirs = list(dataset_root.joinpath("test").glob("*"))
     _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir, "m4a",
+                             skip_existing, logger)
+
+
+def preprocess_vctk(datasets_root: Path, out_dir: Path, skip_existing=False):
+    # Initialize the preprocessing
+    dataset_name = "VCTK"
+    dataset_root, logger = _init_preprocess_dataset(dataset_name, datasets_root, out_dir)
+    if not dataset_root:
+        return
+
+    # Get the speaker directories
+    # Preprocess all speakers
+    speaker_dirs = list(dataset_root.joinpath("wav48").glob("*"))
+    _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir, "wav",
                              skip_existing, logger)

@@ -54,6 +54,14 @@ def wav_to_mel_spectrogram(wav):
     )
     return frames.astype(np.float32).T
 
+def wav_to_spectrogram(wav):
+    frames = np.abs(librosa.core.stft(
+        wav,
+        n_fft=512,
+        hop_length=int(sampling_rate * mel_window_step / 1000),
+        win_length=int(sampling_rate * mel_window_length / 1000),
+    ))
+    return frames.astype(np.float32).T
 
 def trim_long_silences(wav):
     """
