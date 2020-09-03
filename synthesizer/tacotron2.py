@@ -12,7 +12,7 @@ class Tacotron2:
     def __init__(self, checkpoint_path, hparams, gta=False, model_name="Tacotron"):
         log("Constructing model: %s" % model_name)
         #Force the batch size to be known in order to use attention masking in batch synthesis
-        inputs = tf.placeholder(tf.int32, (None, None), name="inputs")
+        inputs = tf.placeholder(tf.float32, (None, None, hparams.num_ppgs), name="inputs")
         input_lengths = tf.placeholder(tf.int32, (None,), name="input_lengths")
         speaker_embeddings = tf.placeholder(tf.float32, (None, hparams.speaker_embedding_size),
                                             name="speaker_embeddings")
@@ -68,8 +68,9 @@ class Tacotron2:
         """
         
         # Prepare the input
-        cleaner_names = [x.strip() for x in self._hparams.cleaners.split(",")]
-        seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
+        # cleaner_names = [x.strip() for x in self._hparams.cleaners.split(",")]
+        # seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
+        seqs = texts
         input_lengths = [len(seq) for seq in seqs]
         input_seqs, max_seq_len = self._prepare_inputs(seqs)
         split_infos = [[max_seq_len, 0, 0, 0]]
@@ -97,12 +98,13 @@ class Tacotron2:
         
         return [mel.T for mel in mels], alignments
     
-    def synthesize(self, texts, basenames, out_dir, log_dir, mel_filenames, embed_filenames):
+    def synthesize(self, ppg_filenames, basenames, out_dir, log_dir, mel_filenames, embed_filenames):
         hparams = self._hparams
         cleaner_names = [x.strip() for x in hparams.cleaners.split(",")]
               
-        assert 0 == len(texts) % self._hparams.tacotron_num_gpus
-        seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
+        assert 0 == len(ppg_filenames) % self._hparams.tacotron_num_gpus
+        seqs = [np.load(ppg_filename) for ppg_filename in ppg_filenames]
+        # seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
         input_lengths = [len(seq) for seq in seqs]
         
         size_per_device = len(seqs) // self._hparams.tacotron_num_gpus
@@ -134,7 +136,7 @@ class Tacotron2:
                 split_infos[i][1] = max_target_len #Not really used but setting it in case for future development maybe?
             
             feed_dict[self.targets] = target_seqs
-            assert len(np_targets) == len(texts)
+            assert len(np_targets) == len(seqs)
         
         feed_dict[self.split_infos] = np.asarray(split_infos, dtype=np.int32)
         feed_dict[self.speaker_embeddings] = [np.load(f) for f in embed_filenames]
@@ -155,7 +157,7 @@ class Tacotron2:
             
             #Take off the batch wise padding
             mels = [mel[:target_length, :] for mel, target_length in zip(mels, target_lengths)]
-            assert len(mels) == len(texts)
+            assert len(mels) == len(seqs)
         
         else:
             linears, mels, alignments, stop_tokens = self.session.run(
@@ -222,7 +224,7 @@ class Tacotron2:
         return np.stack([self._pad_input(x, max_len) for x in inputs]), max_len
     
     def _pad_input(self, x, length):
-        return np.pad(x, (0, length - x.shape[0]), mode="constant", constant_values=self._pad)
+        return np.pad(x, [(0, length - x.shape[0]), (0, 0)], mode="constant", constant_values=self._pad)
     
     def _prepare_targets(self, targets, alignment):
         max_len = max([len(t) for t in targets])

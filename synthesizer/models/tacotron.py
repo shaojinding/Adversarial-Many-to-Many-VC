@@ -29,8 +29,9 @@ class Tacotron():
         self._hparams = hparams
     
     def initialize(self, inputs, input_lengths, embed_targets, mel_targets=None, 
-                   stop_token_targets=None, linear_targets=None, targets_lengths=None, gta=False,
-                   global_step=None, is_training=False, is_evaluating=False, split_infos=None):
+                   stop_token_targets=None, linear_targets=None, targets_lengths=None, speaker_labels=None, gta=False,
+                   global_step=None, is_training=False, is_evaluating=False, split_infos=None,
+                   tacotron_train_steps=None):
         """
         Initializes the model for inference sets "mel_outputs" and "alignments" fields.
         Args:
@@ -75,6 +76,11 @@ class Tacotron():
             tower_targets_lengths = \
                 tf.split(targets_lengths, num_or_size_splits=hp.tacotron_num_gpus, axis=0) if \
                     targets_lengths is not None else targets_lengths
+
+            ### Adversial classifier ###
+
+            tower_speaker_labels = tf.split(speaker_labels, num_or_size_splits=hp.tacotron_num_gpus, axis=0) if \
+                speaker_labels is not None else speaker_labels
             
             ### SV2TTS ###
             
@@ -83,7 +89,7 @@ class Tacotron():
             
             ##############
             
-            p_inputs = tf.py_func(split_func, [inputs, split_infos[:, 0]], lout_int)
+            p_inputs = tf.py_func(split_func, [inputs, split_infos[:, 0]], lout_float)
             p_mel_targets = tf.py_func(split_func, [mel_targets, split_infos[:, 1]],
                                        lout_float) if mel_targets is not None else mel_targets
             p_stop_token_targets = tf.py_func(split_func, [stop_token_targets, split_infos[:, 2]],
@@ -96,8 +102,9 @@ class Tacotron():
             
             batch_size = tf.shape(inputs)[0]
             mel_channels = hp.num_mels
+            ppg_channels = hp.num_ppgs
             for i in range(hp.tacotron_num_gpus):
-                tower_inputs.append(tf.reshape(p_inputs[i], [batch_size, -1]))
+                tower_inputs.append(tf.reshape(p_inputs[i], [batch_size, -1, ppg_channels]))
                 if p_mel_targets is not None:
                     tower_mel_targets.append(
                         tf.reshape(p_mel_targets[i], [batch_size, -1, mel_channels]))
@@ -109,6 +116,7 @@ class Tacotron():
         self.tower_alignments = []
         self.tower_stop_token_prediction = []
         self.tower_mel_outputs = []
+        self.tower_adversial_classifier_logits = []
         
         tower_embedded_inputs = []
         tower_enc_conv_output_shape = []
@@ -132,17 +140,45 @@ class Tacotron():
                     post_condition = hp.predict_linear and not gta
                     
                     # Embeddings ==> [batch_size, sequence_length, embedding_dim]
-                    self.embedding_table = tf.get_variable(
-                        "inputs_embedding", [len(symbols), hp.embedding_dim], dtype=tf.float32)
-                    embedded_inputs = tf.nn.embedding_lookup(self.embedding_table, tower_inputs[i])
+                    # self.embedding_table = tf.get_variable(
+                    #     "inputs_embedding", [len(symbols), hp.embedding_dim], dtype=tf.float32)
+                    # embedded_inputs = tf.nn.embedding_lookup(self.embedding_table, tower_inputs[i])
+                    embedded_inputs = tower_inputs[i]
                     
                     # Encoder Cell ==> [batch_size, encoder_steps, encoder_lstm_units]
-                    encoder_cell = TacotronEncoderCell(
-                        EncoderConvolutions(is_training, hparams=hp, scope="encoder_convolutions"),
-                        EncoderRNN(is_training, size=hp.encoder_lstm_units,
-                                   zoneout=hp.tacotron_zoneout_rate, scope="encoder_LSTM"))
-                    
+
+                    if hp.is_encoder_lstm_2layers:
+                        encoder_cell = TacotronEncoderCell(
+                            Prenet(is_training, layers_sizes=hp.enc_prenet_layers,
+                                   drop_rate=hp.tacotron_dropout_rate, scope="encoder_prenet"),
+                            EncoderConvolutions(is_training, hparams=hp, scope="encoder_convolutions"),
+                            EncoderRNN(is_training, size=hp.encoder_lstm_units,
+                                       zoneout=hp.tacotron_zoneout_rate, scope="encoder_LSTM",
+                                       is_pyramid=hp.is_encoder_lstm_pyramid),
+                            EncoderRNN(is_training, size=hp.encoder_lstm_units,
+                                       zoneout=hp.tacotron_zoneout_rate, scope="encoder_LSTM",
+                                       is_pyramid=hp.is_encoder_lstm_pyramid))
+                    else:
+                        encoder_cell = TacotronEncoderCell(
+                            Prenet(is_training, layers_sizes=hp.enc_prenet_layers,
+                                   drop_rate=hp.tacotron_dropout_rate, scope="encoder_prenet"),
+                            EncoderConvolutions(is_training, hparams=hp, scope="encoder_convolutions"),
+                            EncoderRNN(is_training, size=hp.encoder_lstm_units,
+                                       zoneout=hp.tacotron_zoneout_rate, scope="encoder_LSTM", is_pyramid=hp.is_encoder_lstm_pyramid))
+
                     encoder_outputs = encoder_cell(embedded_inputs, tower_input_lengths[i])
+
+    
+                    ### Adversial classifier ###
+                    p = tf.cast(global_step, tf.float32) / tf.cast(tacotron_train_steps, tf.float32)
+                    l = 2. / (1. + tf.math.exp(-10. * p)) - 1
+                    adversial_classifier = AdversialClassifier(is_training, n_classes=hp.n_speakers, scale=l,
+                                                               scope="adversial_classifier")
+                    logits_adversial = adversial_classifier(encoder_outputs)
+                    self.tower_adversial_classifier_logits.append(logits_adversial)
+
+
+                    ############################
                     
                     # For shape visualization purpose
                     enc_conv_output_shape = encoder_cell.conv_output_shape
@@ -282,6 +318,7 @@ class Tacotron():
         # self.tower_linear_targets = tower_linear_targets
         self.tower_targets_lengths = tower_targets_lengths
         self.tower_stop_token_targets = tower_stop_token_targets
+        self.tower_speaker_labels = tower_speaker_labels
         
         self.all_vars = tf.trainable_variables()
         
@@ -291,10 +328,11 @@ class Tacotron():
         log("  GTA mode:                 {}".format(gta))
         log("  Synthesis mode:           {}".format(not (is_training or is_evaluating)))
         log("  Input:                    {}".format(inputs.shape))
-        for i in range(hp.tacotron_num_gpus + hp.tacotron_gpu_start_idx):
-            log("  device:                   {}".format(i))
+        for i in range(hp.tacotron_num_gpus):
+            log("  device:                   {}".format(i + hp.tacotron_gpu_start_idx))
             log("  embedding:                {}".format(tower_embedded_inputs[i].shape))
             log("  enc conv out:             {}".format(tower_enc_conv_output_shape[i]))
+            log("  adversial classifier out: {}".format(self.tower_adversial_classifier_logits[i].shape[i]))
             log("  encoder out (cond):       {}".format(tower_encoder_cond_outputs[i].shape))
             log("  decoder out:              {}".format(self.tower_decoder_output[i].shape))
             log("  residual out:             {}".format(tower_residual[i].shape))
@@ -318,6 +356,7 @@ class Tacotron():
         self.tower_stop_token_loss = []
         self.tower_regularization_loss = []
         self.tower_linear_loss = []
+        self.tower_adversial_loss = []
         self.tower_loss = []
         
         total_before_loss = 0
@@ -325,6 +364,7 @@ class Tacotron():
         total_stop_token_loss = 0
         total_regularization_loss = 0
         total_linear_loss = 0
+        total_adversial_loss = 0
         total_loss = 0
 
         gpus = ["/gpu:{}".format(i) for i in
@@ -381,7 +421,19 @@ class Tacotron():
                         #         l1[:, :, 0:n_priority_freq])
                         # else:
                         #     linear_loss = 0.
-                    
+
+                    # Adversial classifier
+                    if hp.if_use_speaker_classifier:
+                        labels = self.tower_speaker_labels[i]
+                        logits = self.tower_adversial_classifier_logits[i]
+                        logits_shape = tf.shape(logits)
+                        labels = tf.reshape(tf.tile(labels, logits_shape[1:2]), [logits_shape[0], logits_shape[1]])
+                        adversial_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+                            labels=labels,
+                            logits=logits))
+                    else:
+                        adversial_loss = 0.0
+
                     # Compute the regularization weight
                     if hp.tacotron_scale_regularization:
                         reg_weight_scaler = 1. / (
@@ -405,8 +457,9 @@ class Tacotron():
                     self.tower_stop_token_loss.append(stop_token_loss)
                     self.tower_regularization_loss.append(regularization)
                     self.tower_linear_loss.append(linear_loss)
+                    self.tower_adversial_loss.append(adversial_loss)
                     
-                    loss = before + after + stop_token_loss + regularization + linear_loss
+                    loss = before + after + stop_token_loss + regularization + linear_loss + adversial_loss
                     self.tower_loss.append(loss)
         
         for i in range(hp.tacotron_num_gpus):
@@ -415,6 +468,7 @@ class Tacotron():
             total_stop_token_loss += self.tower_stop_token_loss[i]
             total_regularization_loss += self.tower_regularization_loss[i]
             total_linear_loss += self.tower_linear_loss[i]
+            total_adversial_loss += self.tower_adversial_loss[i]
             total_loss += self.tower_loss[i]
         
         self.before_loss = total_before_loss / hp.tacotron_num_gpus
@@ -422,6 +476,7 @@ class Tacotron():
         self.stop_token_loss = total_stop_token_loss / hp.tacotron_num_gpus
         self.regularization_loss = total_regularization_loss / hp.tacotron_num_gpus
         self.linear_loss = total_linear_loss / hp.tacotron_num_gpus
+        self.adversial_loss = total_adversial_loss / hp.tacotron_num_gpus
         self.loss = total_loss / hp.tacotron_num_gpus
     
     def add_optimizer(self, global_step):

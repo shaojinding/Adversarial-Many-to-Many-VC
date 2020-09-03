@@ -1,66 +1,66 @@
-# Real-Time Voice Cloning
-This repository is an implementation of [Transfer Learning from Speaker Verification to
-Multispeaker Text-To-Speech Synthesis](https://arxiv.org/pdf/1806.04558.pdf) (SV2TTS) with a vocoder that works in real-time. Feel free to check [my thesis](https://matheo.uliege.be/handle/2268.2/6801) if you're curious or if you're looking for info I haven't documented yet (don't hesitate to make an issue for that too). Mostly I would recommend giving a quick look to the figures beyond the introduction.
+# Improving the Speaker Identity of Non-Parallel Many-to-Many Voice Conversion with Adversarial Speaker Recognition
 
-SV2TTS is a three-stage deep learning framework that allows to create a numerical representation of a voice from a few seconds of audio, and to use it to condition a text-to-speech model trained to generalize to new voices.
+Code for this paper [Improving the Speaker Identity of Non-Parallel Many-to-Many Voice Conversion with Adversarial Speaker Recognition](https://psi.engr.tamu.edu/wp-content/uploads/2020/08/IS2020_shaojin_Adversarial_speaker_classifier_camera_ready.pdf)
 
-**Video demonstration** (click the picture):
+Shaojin Ding, Guanlong Zhao, Ricardo Gutierrez-Osuna
 
-[![Toolbox demo](https://i.imgur.com/Ixy13b7.png)](https://www.youtube.com/watch?v=-O_hYhToKoA)
+In INTERSPEECH 2020
 
+This is a TensorFlow + Pytorch implementation. This implementation is adapted from the Real Time Voice Clone implementation at [https://github.com/CorentinJ/Real-Time-Voice-Cloning](https://github.com/CorentinJ/Real-Time-Voice-Cloning).
 
+## Dataset:
 
-### Papers implemented  
-| URL | Designation | Title | Implementation source |
-| --- | ----------- | ----- | --------------------- |
-|[**1806.04558**](https://arxiv.org/pdf/1806.04558.pdf) | **SV2TTS** | **Transfer Learning from Speaker Verification to Multispeaker Text-To-Speech Synthesis** | This repo |
-|[1802.08435](https://arxiv.org/pdf/1802.08435.pdf) | WaveRNN (vocoder) | Efficient Neural Audio Synthesis | [fatchord/WaveRNN](https://github.com/fatchord/WaveRNN) |
-|[1712.05884](https://arxiv.org/pdf/1712.05884.pdf) | Tacotron 2 (synthesizer) | Natural TTS Synthesis by Conditioning Wavenet on Mel Spectrogram Predictions | [Rayhane-mamah/Tacotron-2](https://github.com/Rayhane-mamah/Tacotron-2)
-|[1710.10467](https://arxiv.org/pdf/1710.10467.pdf) | GE2E (encoder)| Generalized End-To-End Loss for Speaker Verification | This repo |
-
-## News
-**06/07/19:** Need to run within a docker container on a remote server? See [here](https://sean.lane.sh/posts/2019/07/Running-the-Real-Time-Voice-Cloning-project-in-Docker/).
-
-**25/06/19:** Experimental support for low-memory GPUs (~2gb) added for the synthesizer. Pass `--low_mem` to `demo_cli.py` or `demo_toolbox.py` to enable it. It adds a big overhead, so it's not recommended if you have enough VRAM.
+* [VCTK](https://datashare.is.ed.ac.uk/handle/10283/2651)
+  * [Audio samples](https://shaojinding.github.io/samples/adv).
+  *  [Trained model](https://drive.google.com/drive/folders/1FxNC2g8sw9aKQBjL-qBTnkM6VMMUQlLe?usp=sharing).
 
 
-## Quick start
 ### Requirements
-You will need the following whether you plan to use the toolbox only or to retrain the models.
 
-**Python 3.7**. Python 3.6 might work too, but I wouldn't go lower because I make extensive use of pathlib.
+* Python 3.7 or newer
+* PyTorch with CUDA enabled
+* TensorFlow 1.13.1
+* Run `pip install -r requirements.txt`
 
-Run `pip install -r requirements.txt` to install the necessary packages. Additionally you will need [PyTorch](https://pytorch.org/get-started/locally/) (>=1.0.1).
+### Data preprocessing
 
-A GPU is mandatory, but you don't necessarily need a high tier GPU if you only want to use the toolbox.
+We use the speaker encoder model and vocoder model from [here](https://github.com/CorentinJ/Real-Time-Voice-Cloning/wiki/Pretrained-models). We only train the voice conversion model (i.e., synthesizer).
 
-### Pretrained models
-Download the latest [here](https://github.com/CorentinJ/Real-Time-Voice-Cloning/wiki/Pretrained-models).
+Before running, put the speaker encoder and vocoder at `encoder/saved_models/pretrained.pt` and `vocoder/saved_models/pretrained/pretrained.pt`
 
-### Preliminary
-Before you download any dataset, you can begin by testing your configuration with:
+1. Download and uncompress [the VCTK dataset](
+  https://datashare.is.ed.ac.uk/handle/10283/2651).
+2. Manually split the train and test set (there is no official data split). Put them as `<dataset_root>/VCTK/train/p227` and `<dataset_root>/VCTK/test/p228`
+3. Run `python synthesizer_preprocess_audio.py <datasets_root>`
+4. Run `python synthesizer_preprocess_embeds.py <datasets_root>/SV2TTS/synthesizer_train`
+5. Run `python synthesizer_preprocess_embeds.py <datasets_root>/SV2TTS/synthesizer_test`
 
-`python demo_cli.py`
 
-If all tests pass, you're good to go.
+## Training and inference
 
-### Datasets
-For playing with the toolbox alone, I only recommend downloading [`LibriSpeech/train-clean-100`](http://www.openslr.org/resources/12/train-clean-100.tar.gz). Extract the contents as `<datasets_root>/LibriSpeech/train-clean-100` where `<datasets_root>` is a directory of your choosing. Other datasets are supported in the toolbox, see [here](https://github.com/CorentinJ/Real-Time-Voice-Cloning/wiki/Training#datasets). You're free not to download any dataset, but then you will need your own data as audio files or you will have to record it with the toolbox.
+To launch training:
 
-### Toolbox
-You can then try the toolbox:
+```
+$ python synthesizer_train.py vc_adversarial <datasets_root>/SV2TTS/synthesizer_train
+```
 
-`python demo_toolbox.py -d <datasets_root>`  
-or  
-`python demo_toolbox.py`  
+To run inference, use `synthesis_ppg_script.py`. Change the `syn_dir` to the path of the trained model, e.g., `synthesizer/saved_models/logs-train_adversarial_vctk/taco_pretrained`
 
-depending on whether you downloaded any datasets. If you are running an X-server or if you have the error `Aborted (core dumped)`, see [this issue](https://github.com/CorentinJ/Real-Time-Voice-Cloning/issues/11#issuecomment-504733590).
 
-## Wiki
-- **How it all works** (coming soon!)
-- [**Training models yourself**](https://github.com/CorentinJ/Real-Time-Voice-Cloning/wiki/Training)
-- **Training with other data/languages** (coming soon! - see [here](https://github.com/CorentinJ/Real-Time-Voice-Cloning/issues/30#issuecomment-507864097) for now)
-- [**TODO and planned features**](https://github.com/CorentinJ/Real-Time-Voice-Cloning/wiki/TODO-&-planned-features) 
 
-## Contribution
-Feel free to open issues or PRs for any problem you may encounter, typos that you see or aspects that are confusing. Contributions are welcome, open an issue or email me if you have something you want to work on.
+# Acknowledgement
+
+The code is adapted from [CorentinJ
+/
+Real-Time-Voice-Cloning](https://github.com/CorentinJ/Real-Time-Voice-Cloning).
+
+# Cite the work
+```
+@inproceedings{Ding2019,
+  author={Shaojin Ding and Ricardo Gutierrez-Osuna},
+  title={{Improving the Speaker Identity of Non-Parallel Many-to-Many Voice Conversion with Adversarial Speaker Recognition
+}},
+  year=2020,
+  booktitle={Proc. Interspeech 2020},
+}
+```

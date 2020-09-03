@@ -48,7 +48,8 @@ def add_train_stats(model, hparams):
         
         tf.summary.scalar("regularization_loss", model.regularization_loss)
         tf.summary.scalar("stop_token_loss", model.stop_token_loss)
-        tf.summary.scalar("loss", model.loss)
+        tf.summary.scalar("adversial_loss", model.adversial_loss)
+        tf.summary.scalar("loss", model.loss - model.adversial_loss)
         tf.summary.scalar("learning_rate", model.learning_rate)  # Control learning rate decay speed
         if hparams.tacotron_teacher_forcing_mode == "scheduled":
             tf.summary.scalar("teacher_forcing_ratio", model.ratio)  # Control teacher forcing 
@@ -61,7 +62,7 @@ def add_train_stats(model, hparams):
 
 
 def add_eval_stats(summary_writer, step, linear_loss, before_loss, after_loss, stop_token_loss,
-                   loss):
+                   adversial_loss, loss):
     values = [
         tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/eval_before_loss",
                          simple_value=before_loss),
@@ -69,7 +70,9 @@ def add_eval_stats(summary_writer, step, linear_loss, before_loss, after_loss, s
                          simple_value=after_loss),
         tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/stop_token_loss",
                          simple_value=stop_token_loss),
-        tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/eval_loss", simple_value=loss),
+        tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/adversial_loss",
+                         simple_value=adversial_loss),
+        tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/eval_loss", simple_value=loss-adversial_loss),
     ]
     if linear_loss is not None:
         values.append(tf.Summary.Value(tag="Tacotron_eval_model/eval_stats/eval_linear_loss",
@@ -87,8 +90,10 @@ def model_train_mode(args, feeder, hparams, global_step):
         model = create_model("Tacotron", hparams)
         model.initialize(feeder.inputs, feeder.input_lengths, feeder.speaker_embeddings, 
                          feeder.mel_targets, feeder.token_targets,
-                         targets_lengths=feeder.targets_lengths, global_step=global_step,
-                         is_training=True, split_infos=feeder.split_infos)
+                         targets_lengths=feeder.targets_lengths, speaker_labels=feeder.speaker_labels,
+                         global_step=global_step,
+                         is_training=True, split_infos=feeder.split_infos,
+                         tacotron_train_steps=args.tacotron_train_steps)
         model.add_loss()
         model.add_optimizer(global_step)
         stats = add_train_stats(model, hparams)
@@ -100,9 +105,11 @@ def model_test_mode(args, feeder, hparams, global_step):
         model = create_model("Tacotron", hparams)
         model.initialize(feeder.eval_inputs, feeder.eval_input_lengths, 
                          feeder.eval_speaker_embeddings, feeder.eval_mel_targets,
-                         feeder.eval_token_targets, targets_lengths=feeder.eval_targets_lengths, 
+                         feeder.eval_token_targets, targets_lengths=feeder.eval_targets_lengths,
+                         speaker_labels=feeder.eval_speaker_labels,
                          global_step=global_step, is_training=False, is_evaluating=True,
-                         split_infos=feeder.eval_split_infos)
+                         split_infos=feeder.eval_split_infos,
+                         tacotron_train_steps=args.tacotron_train_steps)
         model.add_loss()
         return model
 
@@ -128,7 +135,10 @@ def train(log_dir, args, hparams):
     os.makedirs(meta_folder, exist_ok=True)
     
     checkpoint_fpath = os.path.join(save_dir, "tacotron_model.ckpt")
-    metadat_fpath = os.path.join(args.synthesizer_root, "train.txt")
+    if hparams.if_use_speaker_classifier:
+        metadat_fpath = os.path.join(args.synthesizer_root, "train_augment_speaker.txt")
+    else:
+        metadat_fpath = os.path.join(args.synthesizer_root, "train.txt")
     
     log("Checkpoint path: {}".format(checkpoint_fpath))
     log("Loading training data from: {}".format(metadat_fpath))
@@ -207,11 +217,12 @@ def train(log_dir, args, hparams):
             # Training loop
             while not coord.should_stop() and step < args.tacotron_train_steps:
                 start_time = time.time()
-                step, loss, opt = sess.run([global_step, model.loss, model.optimize])
+                step, loss, adversial_loss, opt = sess.run([global_step, model.loss, model.adversial_loss, model.optimize])
+                loss -= adversial_loss
                 time_window.append(time.time() - start_time)
                 loss_window.append(loss)
-                message = "Step {:7d} [{:.3f} sec/step, loss={:.5f}, avg_loss={:.5f}]".format(
-                    step, time_window.average, loss, loss_window.average)
+                message = "Step {:7d} [{:.3f} sec/step, loss={:.5f}, avg_loss={:.5f}, adv_loss={:.5f}]".format(
+                    step, time_window.average, loss, loss_window.average, adversial_loss)
                 log(message, end="\r", slack=(step % args.checkpoint_interval == 0))
                 print(message)
                 
@@ -233,6 +244,7 @@ def train(log_dir, args, hparams):
                     stop_token_losses = []
                     linear_losses = []
                     linear_loss = None
+                    adversial_losses = []
                     
                     if hparams.predict_linear:
                         for i in tqdm(range(feeder.test_steps)):
@@ -264,12 +276,13 @@ def train(log_dir, args, hparams):
                     
                     else:
                         for i in tqdm(range(feeder.test_steps)):
-                            eloss, before_loss, after_loss, stop_token_loss, mel_p, mel_t, t_len,\
+                            eloss, before_loss, after_loss, stop_token_loss, adversial_loss, mel_p, mel_t, t_len,\
 							align = sess.run(
                                 [
                                     eval_model.tower_loss[0], eval_model.tower_before_loss[0],
                                     eval_model.tower_after_loss[0],
                                     eval_model.tower_stop_token_loss[0],
+                                    eval_model.tower_adversial_loss[0],
                                     eval_model.tower_mel_outputs[0][0],
                                     eval_model.tower_mel_targets[0][0],
                                     eval_model.tower_targets_lengths[0][0],
@@ -279,11 +292,13 @@ def train(log_dir, args, hparams):
                             before_losses.append(before_loss)
                             after_losses.append(after_loss)
                             stop_token_losses.append(stop_token_loss)
+                            adversial_losses.append(adversial_loss)
                     
                     eval_loss = sum(eval_losses) / len(eval_losses)
                     before_loss = sum(before_losses) / len(before_losses)
                     after_loss = sum(after_losses) / len(after_losses)
                     stop_token_loss = sum(stop_token_losses) / len(stop_token_losses)
+                    adversial_loss = sum(adversial_losses) / len(adversial_losses)
                     
                     log("Saving eval log to {}..".format(eval_dir))
                     # Save some log to monitor model improvement on same unseen sequence
@@ -322,7 +337,7 @@ def train(log_dir, args, hparams):
                     log("Eval loss for global step {}: {:.3f}".format(step, eval_loss))
                     log("Writing eval summary!")
                     add_eval_stats(summary_writer, step, linear_loss, before_loss, after_loss,
-                                   stop_token_loss, eval_loss)
+                                   stop_token_loss, adversial_loss, eval_loss)
                 
                 if step % args.checkpoint_interval == 0 or step == args.tacotron_train_steps or \
                         step == 300:
@@ -365,18 +380,18 @@ def train(log_dir, args, hparams):
                                                                                       step, loss),
                                           target_spectrogram=target,
                                           max_len=target_length)
-                    log("Input at step {}: {}".format(step, sequence_to_text(input_seq)))
+                    #log("Input at step {}: {}".format(step, sequence_to_text(input_seq)))
                 
                 if step % args.embedding_interval == 0 or step == args.tacotron_train_steps or step == 1:
                     # Get current checkpoint state
                     checkpoint_state = tf.train.get_checkpoint_state(save_dir)
                     
                     # Update Projector
-                    log("\nSaving Model Character Embeddings visualization..")
-                    add_embedding_stats(summary_writer, [model.embedding_table.name],
-                                        [char_embedding_meta],
-                                        checkpoint_state.model_checkpoint_path)
-                    log("Tacotron Character embeddings have been updated on tensorboard!")
+                    #log("\nSaving Model Character Embeddings visualization..")
+                    #add_embedding_stats(summary_writer, [model.embedding_table.name],
+                    #                    [char_embedding_meta],
+                    #                    checkpoint_state.model_checkpoint_path)
+                    #log("Tacotron Character embeddings have been updated on tensorboard!")
             
             log("Tacotron training complete after {} global steps!".format(
                 args.tacotron_train_steps), slack=True)

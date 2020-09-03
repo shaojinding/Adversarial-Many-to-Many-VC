@@ -4,6 +4,9 @@ import numpy as np
 import tensorflow as tf
 from scipy import signal
 from scipy.io import wavfile
+from synthesizer.ppg import compute_full_ppg_wrapper, compute_monophone_ppg, DependenciesPPG, feat
+
+ppg_deps = DependenciesPPG()
 
 
 def load_wav(path, sr):
@@ -204,3 +207,13 @@ def _denormalize(D, hparams):
         return (((D + hparams.max_abs_value) * -hparams.min_level_db / (2 * hparams.max_abs_value)) + hparams.min_level_db)
     else:
         return ((D * -hparams.min_level_db / hparams.max_abs_value) + hparams.min_level_db)
+
+def get_ppg(wav, fs, shift):
+    wave_data = feat.read_wav_kaldi_internal(wav, fs)
+    seq = compute_full_ppg_wrapper(wave_data, ppg_deps.nnet, ppg_deps.lda, shift)
+    return seq
+
+def get_monophone_ppg(wav, fs, shift):
+    wave_data = feat.read_wav_kaldi_internal(wav, fs)
+    seq = compute_monophone_ppg(wave_data, ppg_deps.nnet, ppg_deps.lda, ppg_deps.monophone_trans, shift)
+    return seq

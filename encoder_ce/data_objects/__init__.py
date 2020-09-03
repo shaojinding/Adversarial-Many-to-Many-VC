@@ -1,2 +1,0 @@
-from encoder_ce.data_objects.speaker_verification_dataset import SpeakerVerificationDataset
-from encoder_ce.data_objects.speaker_verification_dataset import SpeakerVerificationDataLoader

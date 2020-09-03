@@ -1,4 +1,4 @@
-from multiprocessing.pool import Pool 
+from multiprocessing.pool import Pool
 from synthesizer import audio
 from functools import partial
 from itertools import chain
@@ -9,27 +9,121 @@ from tqdm import tqdm
 import numpy as np
 import librosa
 
-
-def preprocess_librispeech(datasets_root: Path, out_dir: Path, n_processes: int, 
-                           skip_existing: bool, hparams):
+def add_speaker_label_vctk(datasets_root: Path):
     # Gather the input directories
-    dataset_root = datasets_root.joinpath("LibriSpeech")
-    input_dirs = [dataset_root.joinpath("train-clean-100"), 
+    dataset_root = datasets_root.joinpath("VCTK")
+    input_dirs = [dataset_root.joinpath("train")]
+    print("\n    ".join(map(str, ["Using data from:"] + input_dirs)))
+    assert all(input_dir.exists() for input_dir in input_dirs)
+
+    # Create a metadata file
+    input_meta_path = datasets_root.joinpath("SV2TTS", "synthesizer_train", "train.txt")
+    output_meta_path = datasets_root.joinpath("SV2TTS", "synthesizer_train", "train_augment_speaker.txt")
+    input_metadata_file = input_meta_path.open("r", encoding="utf-8")
+    output_metadata_file = output_meta_path.open("w", encoding="utf-8")
+
+    # Preprocess the dataset
+    speaker_dirs = list(chain.from_iterable(input_dir.glob("*") for input_dir in input_dirs))
+    speakers = sorted([speaker_dir.name for speaker_dir in speaker_dirs])
+
+    for line in input_metadata_file.readlines():
+        items = line.strip().split("|")
+        wav_name = items[0]
+        speaker = wav_name.split('-')[1]
+        speaker_label = speakers.index(speaker)
+        items.append('None')
+        items.append(speaker_label)
+        output_metadata_file.write("|".join(str(x) for x in items) + "\n")
+    output_metadata_file.close()
+
+def add_speaker_label_librispeech(datasets_root: Path):
+    # Gather the input directories
+    dataset_root = datasets_root.joinpath("Librispeech")
+    input_dirs = [dataset_root.joinpath("train-clean-100"),
                   dataset_root.joinpath("train-clean-360")]
     print("\n    ".join(map(str, ["Using data from:"] + input_dirs)))
     assert all(input_dir.exists() for input_dir in input_dirs)
-    
+
+    # Create a metadata file
+    input_meta_path = datasets_root.joinpath("SV2TTS", "synthesizer", "train.txt")
+    output_meta_path = datasets_root.joinpath("SV2TTS", "synthesizer", "train_augment_speaker.txt")
+    input_metadata_file = input_meta_path.open("r", encoding="utf-8")
+    output_metadata_file = output_meta_path.open("w", encoding="utf-8")
+
+    # Preprocess the dataset
+    speaker_dirs = list(chain.from_iterable(input_dir.glob("*") for input_dir in input_dirs))
+    speakers = sorted([speaker_dir.name for speaker_dir in speaker_dirs])
+
+    for line in input_metadata_file.readlines():
+        items = line.strip().split("|")
+        wav_name = items[0]
+        speaker = wav_name.split('-')[1]
+        speaker_label = speakers.index(speaker)
+        items.append(speaker_label)
+        output_metadata_file.write("|".join(str(x) for x in items) + "\n")
+    output_metadata_file.close()
+
+def preprocess_vctk(datasets_root: Path, partition: str, out_dir: Path, n_processes: int,
+                    skip_existing: bool, hparams):
+    # Gather the input directories
+    dataset_root = datasets_root.joinpath("VCTK")
+    input_dirs = [dataset_root.joinpath(partition)]
+    print("\n    ".join(map(str, ["Using data from:"] + input_dirs)))
+    assert all(input_dir.exists() for input_dir in input_dirs)
+
     # Create the output directories for each output file type
     out_dir.joinpath("mels").mkdir(exist_ok=True)
     out_dir.joinpath("audio").mkdir(exist_ok=True)
-    
+    out_dir.joinpath("ppgs").mkdir(exist_ok=True)
+
     # Create a metadata file
     metadata_fpath = out_dir.joinpath("train.txt")
     metadata_file = metadata_fpath.open("a" if skip_existing else "w", encoding="utf-8")
 
     # Preprocess the dataset
     speaker_dirs = list(chain.from_iterable(input_dir.glob("*") for input_dir in input_dirs))
-    func = partial(preprocess_speaker, out_dir=out_dir, skip_existing=skip_existing, 
+    func = partial(preprocess_speaker, out_dir=out_dir, skip_existing=skip_existing,
+                   hparams=hparams)
+    job = Pool(n_processes).imap(func, speaker_dirs)
+    for speaker_metadata in tqdm(job, "VCTK", len(speaker_dirs), unit="speakers"):
+        for metadatum in speaker_metadata:
+            metadata_file.write("|".join(str(x) for x in metadatum) + "\n")
+    metadata_file.close()
+
+    # Verify the contents of the metadata file
+    with metadata_fpath.open("r", encoding="utf-8") as metadata_file:
+        metadata = [line.split("|") for line in metadata_file]
+    mel_frames = sum([int(m[5]) for m in metadata])
+    timesteps = sum([int(m[4]) for m in metadata])
+    sample_rate = hparams.sample_rate
+    hours = (timesteps / sample_rate) / 3600
+    print("The dataset consists of %d utterances, %d mel frames, %d audio timesteps (%.2f hours)." %
+          (len(metadata), mel_frames, timesteps, hours))
+    print("Max mel frames length: %d" % max(int(m[5]) for m in metadata))
+    print("Max audio timesteps length: %d" % max(int(m[4]) for m in metadata))
+
+def preprocess_librispeech(datasets_root: Path, out_dir: Path, n_processes: int,
+                           skip_existing: bool, hparams):
+    # Gather the input directories
+    dataset_root = datasets_root.joinpath("LibriSpeech")
+    input_dirs = [dataset_root.joinpath("train-clean-100"),
+                  dataset_root.joinpath("train-clean-360")]
+    # input_dirs = [dataset_root.joinpath("test-clean")]
+    print("\n    ".join(map(str, ["Using data from:"] + input_dirs)))
+    assert all(input_dir.exists() for input_dir in input_dirs)
+
+    # Create the output directories for each output file type
+    out_dir.joinpath("mels").mkdir(exist_ok=True)
+    out_dir.joinpath("audio").mkdir(exist_ok=True)
+    out_dir.joinpath("ppgs").mkdir(exist_ok=True)
+
+    # Create a metadata file
+    metadata_fpath = out_dir.joinpath("train.txt")
+    metadata_file = metadata_fpath.open("a" if skip_existing else "w", encoding="utf-8")
+
+    # Preprocess the dataset
+    speaker_dirs = list(chain.from_iterable(input_dir.glob("*") for input_dir in input_dirs))
+    func = partial(preprocess_speaker, out_dir=out_dir, skip_existing=skip_existing,
                    hparams=hparams)
     job = Pool(n_processes).imap(func, speaker_dirs)
     for speaker_metadata in tqdm(job, "LibriSpeech", len(speaker_dirs), unit="speakers"):
@@ -40,15 +134,16 @@ def preprocess_librispeech(datasets_root: Path, out_dir: Path, n_processes: int,
     # Verify the contents of the metadata file
     with metadata_fpath.open("r", encoding="utf-8") as metadata_file:
         metadata = [line.split("|") for line in metadata_file]
-    mel_frames = sum([int(m[4]) for m in metadata])
-    timesteps = sum([int(m[3]) for m in metadata])
+    mel_frames = sum([int(m[5]) for m in metadata])
+    timesteps = sum([int(m[4]) for m in metadata])
     sample_rate = hparams.sample_rate
     hours = (timesteps / sample_rate) / 3600
     print("The dataset consists of %d utterances, %d mel frames, %d audio timesteps (%.2f hours)." %
           (len(metadata), mel_frames, timesteps, hours))
-    print("Max input length (text chars): %d" % max(len(m[5]) for m in metadata))
-    print("Max mel frames length: %d" % max(int(m[4]) for m in metadata))
-    print("Max audio timesteps length: %d" % max(int(m[3]) for m in metadata))
+    print("Max input length (text chars): %d" % max(len(m[6]) for m in metadata))
+    print("Max mel frames length: %d" % max(int(m[5]) for m in metadata))
+    print("Max audio timesteps length: %d" % max(int(m[4]) for m in metadata))
+
 
 
 def preprocess_speaker(speaker_dir, out_dir: Path, skip_existing: bool, hparams):
@@ -62,21 +157,21 @@ def preprocess_speaker(speaker_dir, out_dir: Path, skip_existing: bool, hparams)
         except StopIteration:
             # A few alignment files will be missing
             continue
-        
+
         # Iterate over each entry in the alignments file
         for wav_fname, words, end_times in alignments:
             wav_fpath = book_dir.joinpath(wav_fname + ".flac")
             assert wav_fpath.exists()
             words = words.replace("\"", "").split(",")
             end_times = list(map(float, end_times.replace("\"", "").split(",")))
-            
+
             # Process each sub-utterance
             wavs, texts = split_on_silences(wav_fpath, words, end_times, hparams)
             for i, (wav, text) in enumerate(zip(wavs, texts)):
                 sub_basename = "%s_%02d" % (wav_fname, i)
-                metadata.append(process_utterance(wav, text, out_dir, sub_basename, 
+                metadata.append(process_utterance(wav, text, out_dir, sub_basename,
                                                   skip_existing, hparams))
-    
+
     return [m for m in metadata if m is not None]
 
 
@@ -85,13 +180,13 @@ def split_on_silences(wav_fpath, words, end_times, hparams):
     wav, _ = librosa.load(wav_fpath, hparams.sample_rate)
     if hparams.rescale:
         wav = wav / np.abs(wav).max() * hparams.rescaling_max
-    
+
     words = np.array(words)
     start_times = np.array([0.0] + end_times[:-1])
     end_times = np.array(end_times)
     assert len(words) == len(end_times) == len(start_times)
     assert words[0] == "" and words[-1] == ""
-    
+
     # Find pauses that are too long
     mask = (words == "") & (end_times - start_times >= hparams.silence_min_duration_split)
     mask[0] = mask[-1] = True
@@ -104,7 +199,7 @@ def split_on_silences(wav_fpath, words, end_times, hparams):
     if len(noisy_wav) > hparams.sample_rate * 0.02:
         profile = logmmse.profile_noise(noisy_wav, hparams.sample_rate)
         wav = logmmse.denoise(wav, profile, eta=0)
-    
+
     # Re-attach segments that are too short
     segments = list(zip(breaks[:-1], breaks[1:]))
     segment_durations = [start_times[end] - end_times[start] for start, end in segments]
@@ -128,13 +223,13 @@ def split_on_silences(wav_fpath, words, end_times, hparams):
             del segments[j + 1], segment_durations[j + 1]
         else:
             i += 1
-    
+
     # Split the utterance
     segment_times = [[end_times[start], start_times[end]] for start, end in segments]
     segment_times = (np.array(segment_times) * hparams.sample_rate).astype(np.int)
     wavs = [wav[segment_time[0]:segment_time[1]] for segment_time in segment_times]
     texts = [" ".join(words[start + 1:end]).replace("  ", " ") for start, end in segments]
-    
+
     # # DEBUG: play the audio segments (run with -n=1)
     # import sounddevice as sd
     # if len(wavs) > 1:
@@ -148,51 +243,66 @@ def split_on_silences(wav_fpath, words, end_times, hparams):
     #     print("\t%s" % text)
     #     sd.play(wav, 16000, blocking=True)
     # print("")
-    
+
     return wavs, texts
-    
-    
-def process_utterance(wav: np.ndarray, text: str, out_dir: Path, basename: str, 
+
+
+def process_utterance(wav: np.ndarray, text: str, out_dir: Path, basename: str,
                       skip_existing: bool, hparams):
     ## FOR REFERENCE:
     # For you not to lose your head if you ever wish to change things here or implement your own
     # synthesizer.
     # - Both the audios and the mel spectrograms are saved as numpy arrays
-    # - There is no processing done to the audios that will be saved to disk beyond volume  
+    # - There is no processing done to the audios that will be saved to disk beyond volume
     #   normalization (in split_on_silences)
     # - However, pre-emphasis is applied to the audios before computing the mel spectrogram. This
     #   is why we re-apply it on the audio on the side of the vocoder.
     # - Librosa pads the waveform before computing the mel spectrogram. Here, the waveform is saved
     #   without extra padding. This means that you won't have an exact relation between the length
     #   of the wav and of the mel spectrogram. See the vocoder data loader.
-    
-    
+
+
     # Skip existing utterances if needed
     mel_fpath = out_dir.joinpath("mels", "mel-%s.npy" % basename)
     wav_fpath = out_dir.joinpath("audio", "audio-%s.npy" % basename)
+    ppg_fpath = out_dir.joinpath("ppgs", "ppg-%s.npy" % basename)
     if skip_existing and mel_fpath.exists() and wav_fpath.exists():
         return None
-    
+
     # Skip utterances that are too short
     if len(wav) < hparams.utterance_min_duration * hparams.sample_rate:
         return None
-    
+
     # Compute the mel spectrogram
     mel_spectrogram = audio.melspectrogram(wav, hparams).astype(np.float32)
     mel_frames = mel_spectrogram.shape[1]
-    
+
     # Skip utterances that are too long
     if mel_frames > hparams.max_mel_frames and hparams.clip_mels_length:
         return None
-    
-    # Write the spectrogram, embed and audio to disk
+
+    # Compute ppg
+    wav_ppg = (wav * 32767).astype(np.int16)
+    if hparams.use_full_ppg:
+        ppg = audio.get_ppg(wav_ppg, hparams.sample_rate, hparams.hop_size / hparams.sample_rate * 1000)
+    else:
+        ppg = audio.get_monophone_ppg(wav_ppg, hparams.sample_rate, hparams.hop_size / hparams.sample_rate * 1000)
+    ppg_frames = ppg.shape[0]
+
+    # Sometimes ppg can be 1 frame longer than mel
+    min_frames = min(mel_frames, ppg_frames)
+    mel_spectrogram = mel_spectrogram[:, :min_frames]
+    ppg = ppg[:min_frames, :]
+
+    # Write the spectrogram, embed, ppg and audio to disk
     np.save(mel_fpath, mel_spectrogram.T, allow_pickle=False)
     np.save(wav_fpath, wav, allow_pickle=False)
-    
+    np.save(ppg_fpath, ppg, allow_pickle=False)
+
     # Return a tuple describing this training example
-    return wav_fpath.name, mel_fpath.name, "embed-%s.npy" % basename, len(wav), mel_frames, text
- 
- 
+    return wav_fpath.name, mel_fpath.name, ppg_fpath.name, "embed-%s.npy" % basename, len(wav), min_frames, text
+
+
 def embed_utterance(fpaths, encoder_model_fpath):
     if not encoder.is_loaded():
         encoder.load_model(encoder_model_fpath)
@@ -203,20 +313,20 @@ def embed_utterance(fpaths, encoder_model_fpath):
     wav = encoder.preprocess_wav(wav)
     embed = encoder.embed_utterance(wav)
     np.save(embed_fpath, embed, allow_pickle=False)
-    
- 
+
+
 def create_embeddings(synthesizer_root: Path, encoder_model_fpath: Path, n_processes: int):
     wav_dir = synthesizer_root.joinpath("audio")
     metadata_fpath = synthesizer_root.joinpath("train.txt")
     assert wav_dir.exists() and metadata_fpath.exists()
     embed_dir = synthesizer_root.joinpath("embeds")
     embed_dir.mkdir(exist_ok=True)
-    
+
     # Gather the input wave filepath and the target output embed filepath
     with metadata_fpath.open("r") as metadata_file:
         metadata = [line.split("|") for line in metadata_file]
-        fpaths = [(wav_dir.joinpath(m[0]), embed_dir.joinpath(m[2])) for m in metadata]
-        
+        fpaths = [(wav_dir.joinpath(m[0]), embed_dir.joinpath(m[3])) for m in metadata]
+
     # TODO: improve on the multiprocessing, it's terrible. Disk I/O is the bottleneck here.
     # Embed the utterances in separate threads
     func = partial(embed_utterance, encoder_model_fpath=encoder_model_fpath)

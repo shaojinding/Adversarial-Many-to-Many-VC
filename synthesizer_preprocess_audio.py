@@ -1,4 +1,4 @@
-from synthesizer.preprocess import preprocess_librispeech
+from synthesizer.preprocess import preprocess_vctk, add_speaker_label_vctk
 from synthesizer.hparams import hparams
 from utils.argutils import print_args
 from pathlib import Path
@@ -28,7 +28,9 @@ if __name__ == "__main__":
     
     # Process the arguments
     if not hasattr(args, "out_dir"):
-        args.out_dir = args.datasets_root.joinpath("SV2TTS", "synthesizer")
+        args.out_dir = args.datasets_root.joinpath("SV2TTS")
+    args.out_dir_train = args.out_dir.joinpath("synthesizer_train")
+    args.out_dir_test = args.out_dir.joinpath("synthesizer_test")
 
     # Create directories
     assert args.datasets_root.exists()
@@ -37,4 +39,8 @@ if __name__ == "__main__":
     # Preprocess the dataset
     print_args(args, parser)
     args.hparams = hparams.parse(args.hparams)
-    preprocess_librispeech(**vars(args))    
+    preprocess_vctk(
+        args.datasets_root, 'train', args.out_dir_train, args.n_processes, args.skip_existing, args.hparams)
+    add_speaker_label_vctk(args.datasets_root)
+    preprocess_vctk(
+        args.datasets_root, 'test', args.out_dir_test, args.n_processes, args.skip_existing, args.hparams)

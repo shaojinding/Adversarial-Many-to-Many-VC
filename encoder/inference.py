@@ -129,33 +129,21 @@ def embed_utterance(wav, using_partials=True, return_partials=False, **kwargs):
     """
     # Process the entire utterance if not using partials
     if not using_partials:
-        # frames = audio.wav_to_mel_spectrogram(wav)
-        frames = wav
+        frames = audio.wav_to_mel_spectrogram(wav)
         embed = embed_frames_batch(frames[None, ...])[0]
         if return_partials:
             return embed, None, None
         return embed
     
     # Compute where to split the utterance into partials and pad if necessary
-    # wave_slices, mel_slices = compute_partial_slices(len(wav), **kwargs)
-    # max_wave_length = wave_slices[-1].stop
-    # if max_wave_length >= len(wav):
-    #     wav = np.pad(wav, (0, max_wave_length - len(wav)), "constant")
+    wave_slices, mel_slices = compute_partial_slices(len(wav), **kwargs)
+    max_wave_length = wave_slices[-1].stop
+    if max_wave_length >= len(wav):
+        wav = np.pad(wav, (0, max_wave_length - len(wav)), "constant")
     
     # Split the utterance into partials
-    # frames = audio.wav_to_mel_spectrogram(wav)
-    frames = wav
-    # n_frames = frame
-    while frames.shape[0] <= partials_n_frames:
-        frames = np.repeat(frames, 2, axis=0)
-    # if n_frames <= partials_n_frames:
-    #     frames = np.repeat(frames_raw, 2, axis=0)
-    # else:
-    #     frames = frames_raw
-    frame_slices = []
-    for i in range(0, frames.shape[0] - partials_n_frames + 1, partials_n_frames // 2):
-        frame_slices.append([x + i for x in range(partials_n_frames)])
-    frames_batch = np.array([frames[s, :] for s in frame_slices])
+    frames = audio.wav_to_mel_spectrogram(wav)
+    frames_batch = np.array([frames[s] for s in mel_slices])
     partial_embeds = embed_frames_batch(frames_batch)
     
     # Compute the utterance embedding from the partial embeddings

@@ -88,9 +88,11 @@ hparams = HParams(
 	# trim_top_db slowly. If samples are trimmed mid words, try increasing it.
     #	6- If audio quality is too metallic or fragmented (or if linear spectrogram plots are 
 	# showing black silent regions on top), then restart from step 2.
-    num_mels=80,  # Number of mel-spectrogram channels and local conditioning dimensionality
+    num_mels=80,  # Number of mel-spectrogram channels and local conditioning dimensionality    
+    use_full_ppg=False, # If use full ppg, if yes, num_ppgs should be 5816
+    num_ppgs=40,  # Number of PPG channels
     #  network
-    rescale=True,  # Whether to rescale audio prior to preprocessing
+    rescale=False,  # Whether to rescale audio prior to preprocessing
     rescaling_max=0.9,  # Rescaling value
     # Whether to clip silence in Audio (at beginning and end of audio only, not the middle)
     # train samples of lengths between 3sec and 14sec are more than enough to make a model capable
@@ -162,7 +164,7 @@ hparams = HParams(
     ###########################################################################################################################################
     
     # Tacotron
-    outputs_per_step=2, # Was 1
+    outputs_per_step=1, # Was 1
     # number of frames to generate at each decoding step (increase to speed up computation and 
     # allows for higher batch size, decreases G&L audio quality)
     stop_at_any=True,
@@ -172,11 +174,14 @@ hparams = HParams(
     embedding_dim=512,  # dimension of embedding space (these are NOT the speaker embeddings)
     
     # Encoder parameters
+    enc_prenet_layers=[128, 256], # number of layers and number of units of encoder prenet
     enc_conv_num_layers=3,  # number of encoder convolutional layers
     enc_conv_kernel_size=(5,),  # size of encoder convolution filters for each layer
     enc_conv_channels=512,  # number of encoder convolutions filters for each layer
     encoder_lstm_units=256,  # number of lstm units for each direction (forward and backward)
-    
+    is_encoder_lstm_pyramid=True, # if use pyramid lstm to downsample the number of outputs of encoder
+    is_encoder_lstm_2layers=False, # if use two layers of pyramid lstm
+
     # Attention mechanism
     smoothing=False,  # Whether to smooth the attention normalization function
     attention_dim=128,  # dimension of attention space
@@ -343,6 +348,10 @@ hparams = HParams(
     speaker_embedding_size=256,
     silence_min_duration_split=0.4, # Duration in seconds of a silence for an utterance to be split
     utterance_min_duration=1.6,     # Duration in seconds below which utterances are discarded
+
+    ### adversial speaker classifier ###
+    if_use_speaker_classifier=False,
+    n_speakers=1172,
     
 )
 

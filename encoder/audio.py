@@ -54,14 +54,6 @@ def wav_to_mel_spectrogram(wav):
     )
     return frames.astype(np.float32).T
 
-def wav_to_spectrogram(wav):
-    frames = np.abs(librosa.core.stft(
-        wav,
-        n_fft=512,
-        hop_length=int(sampling_rate * mel_window_step / 1000),
-        win_length=int(sampling_rate * mel_window_length / 1000),
-    ))
-    return frames.astype(np.float32).T
 
 def trim_long_silences(wav):
     """
@@ -109,9 +101,7 @@ def trim_long_silences(wav):
 def normalize_volume(wav, target_dBFS, increase_only=False, decrease_only=False):
     if increase_only and decrease_only:
         raise ValueError("Both increase only and decrease only are set")
-    rms = np.sqrt(np.mean((wav * int16_max) ** 2))
-    wave_dBFS = 20 * np.log10(rms / int16_max)
-    dBFS_change = target_dBFS - wave_dBFS
-    if dBFS_change < 0 and increase_only or dBFS_change > 0 and decrease_only:
+    dBFS_change = target_dBFS - 10 * np.log10(np.mean(wav ** 2))
+    if (dBFS_change < 0 and increase_only) or (dBFS_change > 0 and decrease_only):
         return wav
     return wav * (10 ** (dBFS_change / 20))

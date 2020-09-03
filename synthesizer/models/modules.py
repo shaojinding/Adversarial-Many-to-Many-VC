@@ -1,4 +1,5 @@
 import tensorflow as tf
+from synthesizer.models.flip_gradient import flip_gradient
 
 
 class HighwayNet:
@@ -197,7 +198,7 @@ class EncoderRNN:
     """Encoder bidirectional one layer LSTM
     """
     
-    def __init__(self, is_training, size=256, zoneout=0.1, scope=None):
+    def __init__(self, is_training, size=256, zoneout=0.1, scope=None, is_pyramid=False):
         """
         Args:
             is_training: Boolean, determines if the model is training or in inference to control 
@@ -212,6 +213,7 @@ class EncoderRNN:
         self.size = size
         self.zoneout = zoneout
         self.scope = "encoder_LSTM" if scope is None else scope
+        self.is_pyramid = is_pyramid
         
         # Create forward LSTM Cell
         self._fw_cell = ZoneoutLSTMCell(size, is_training,
@@ -225,8 +227,28 @@ class EncoderRNN:
                                         zoneout_factor_output=zoneout,
                                         name="encoder_bw_LSTM")
     
+    def reshape_pyramidal(self, outputs, sequence_length):
+        """
+        Reshapes the given outputs, i.e. reduces the
+        time resolution by 2.
+        Similar to "Listen Attend Spell".
+        https://arxiv.org/pdf/1508.01211.pdf
+        """
+        # [batch_size, max_time, num_units]
+        shape = tf.shape(outputs)
+        batch_size, max_time = shape[0], shape[1]
+        num_units = outputs.get_shape().as_list()[-1]
+
+        pads = [[0, 0], [0, tf.floormod(max_time, 2)], [0, 0]]
+        outputs = tf.pad(outputs, pads)
+
+        concat_outputs = tf.reshape(outputs, (batch_size, -1, num_units * 2))
+        return concat_outputs, tf.floordiv(sequence_length, 2) + tf.floormod(sequence_length, 2)
+
     def __call__(self, inputs, input_lengths):
         with tf.variable_scope(self.scope):
+            if self.is_pyramid:
+                inputs, input_lengths = self.reshape_pyramidal(inputs, input_lengths) 
             outputs, (fw_state, bw_state) = tf.nn.bidirectional_dynamic_rnn(
                 self._fw_cell,
                 self._bw_cell,
@@ -235,7 +257,40 @@ class EncoderRNN:
                 dtype=tf.float32,
                 swap_memory=True)
             
-            return tf.concat(outputs, axis=2)  # Concat and return forward + backward outputs
+            return tf.concat(outputs, axis=2), input_lengths  # Concat and return forward + backward outputs
+
+
+# @tf.custom_gradient
+# def grad_reverse(x):
+#     y = tf.identity(x)
+#
+#     def custom_grad(dy):
+#         return -dy
+#
+#     return y, custom_grad
+
+
+class AdversialClassifier:
+    """
+    Adversial Classifier for encoder output
+    """
+
+    def __init__(self, is_training, n_classes, scale, scope=None):
+        self.is_training = is_training
+        self.scope = "adversial_classifier" if scope is None else scope
+        self.dense = Prenet(is_training, layers_sizes=[512, 512], scope=self.scope)
+        self.classifier = tf.keras.layers.Dense(n_classes)
+        self.scale = scale
+
+
+    def __call__(self, inputs):
+        x = inputs
+        x = flip_gradient(x, self.scale)
+        # x = grad_reverse(x)
+        x = self.dense(x)
+        logits = self.classifier(x)
+        return logits
+
 
 
 class Prenet:
@@ -264,6 +319,8 @@ class Prenet:
         x = inputs
         
         with tf.variable_scope(self.scope):
+            if not self.layers_sizes:
+                return x
             for i, size in enumerate(self.layers_sizes):
                 dense = tf.layers.dense(x, units=size, activation=self.activation,
                                         name="dense_{}".format(i + 1))

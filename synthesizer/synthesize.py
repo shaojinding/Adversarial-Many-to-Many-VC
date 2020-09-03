@@ -51,7 +51,7 @@ def run_synthesis(in_dir, out_dir, model_dir, hparams):
     with open(metadata_filename, encoding="utf-8") as f:
         metadata = [line.strip().split("|") for line in f]
         frame_shift_ms = hparams.hop_size / hparams.sample_rate
-        hours = sum([int(x[4]) for x in metadata]) * frame_shift_ms / 3600
+        hours = sum([int(x[5]) for x in metadata]) * frame_shift_ms / 3600
         print("Loaded metadata for {} examples ({:.2f} hours)".format(len(metadata), hours))
         
     #Set inputs batch wise
@@ -62,17 +62,19 @@ def run_synthesis(in_dir, out_dir, model_dir, hparams):
     metadata = metadata[:-1]
     
     print("Starting Synthesis")
+    ppg_dir = os.path.join(in_dir, 'ppgs')
     mel_dir = os.path.join(in_dir, "mels")
     embed_dir = os.path.join(in_dir, "embeds")
     meta_out_fpath = os.path.join(out_dir, "synthesized.txt")
     with open(meta_out_fpath, "w") as file:
         for i, meta in enumerate(tqdm(metadata)):
-            texts = [m[5] for m in meta]
+            # texts = [m[6] for m in meta]
+            ppg_filenames = [os.path.join(ppg_dir, m[2]) for m in meta]
             mel_filenames = [os.path.join(mel_dir, m[1]) for m in meta]
-            embed_filenames = [os.path.join(embed_dir, m[2]) for m in meta]
+            embed_filenames = [os.path.join(embed_dir, m[3]) for m in meta]
             basenames = [os.path.basename(m).replace(".npy", "").replace("mel-", "") 
                          for m in mel_filenames]
-            synth.synthesize(texts, basenames, synth_dir, None, mel_filenames, embed_filenames)
+            synth.synthesize(ppg_filenames, basenames, synth_dir, None, mel_filenames, embed_filenames)
             
             for elems in meta:
                 file.write("|".join([str(x) for x in elems]) + "\n")
