@@ -4,7 +4,7 @@ Code for this paper [Improving the Speaker Identity of Non-Parallel Many-to-Many
 
 Shaojin Ding, Guanlong Zhao, Ricardo Gutierrez-Osuna
 
-In INTERSPEECH 2020
+Accepted by INTERSPEECH 2020
 
 This is a TensorFlow + Pytorch implementation. This implementation is adapted from the Real Time Voice Clone implementation at [https://github.com/CorentinJ/Real-Time-Voice-Cloning](https://github.com/CorentinJ/Real-Time-Voice-Cloning).
 
@@ -56,11 +56,8 @@ Real-Time-Voice-Cloning](https://github.com/CorentinJ/Real-Time-Voice-Cloning).
 
 # Cite the work
 ```
-@inproceedings{Ding2019,
-  author={Shaojin Ding and Ricardo Gutierrez-Osuna},
-  title={{Improving the Speaker Identity of Non-Parallel Many-to-Many Voice Conversion with Adversarial Speaker Recognition
-}},
-  year=2020,
-  booktitle={Proc. Interspeech 2020},
+@article{dingimproving,
+  title={Improving the Speaker Identity of Non-Parallel Many-to-Many Voice Conversion with Adversarial Speaker Recognition},
+  author={Ding, Shaojin and Zhao, Guanlong and Gutierrez-Osuna, Ricardo}
 }
 ```
